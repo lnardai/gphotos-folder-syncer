@@ -3,10 +3,15 @@ package com.google.photos.library.sample.demos;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.GeneralSecurityException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,15 +34,16 @@ public class UploadDemo {
 
     public static final String ALBUM_TITLE = "Photos album sample app";
     public static final String ALBUM_SAMPLE_IMAGE_RESOURCE = "/assets/album.png";
-    public static final String WEDDING_ALBUM_NAME = "Wedding auto";
 
     private static final Logger LOGGER = LoggerFactory.getLogger(UploadDemo.class);
+
+
+    private static UploadContext context;
 
     private static final List<String> REQUIRED_SCOPES =
             ImmutableList.of(
                     "https://www.googleapis.com/auth/photoslibrary.readonly",
                     "https://www.googleapis.com/auth/photoslibrary.appendonly",
-                    "https://www.googleapis.com/auth/photoslibrary.photoslibrary",
                     "https://www.googleapis.com/auth/photoslibrary.sharing");
 
     /**
@@ -45,40 +51,29 @@ public class UploadDemo {
      * commandline argument.
      */
     public static void main(String[] args) throws IOException, GeneralSecurityException {
-        // If the first argument is set, it contains the path to the credentials file.
-        Optional<String> credentialsFile = Optional.empty();
 
-        if (args.length > 0) {
-            credentialsFile = Optional.of(args[0]);
-        }
+        String credentialFilePath = readEnvironmentVariableWithDefault("CREDENTIAL_FILE", UploadConfigDefaults.DEFAULT_CRED_FILE);
+        String syncDirectory = readEnvironmentVariableWithDefault("SYNC_DIRECTORY", UploadConfigDefaults.DEFAULT_SYNC_FOLDER);
+        String albumName = readEnvironmentVariableWithDefault("ALBUM_NAME", UploadConfigDefaults.DEFAULT_ALBUM_NAME);
+        context = new UploadContext(credentialFilePath, syncDirectory, albumName, UploadConfigDefaults.DEFAULT_SYNC_IN_SECONDS);
 
-        String credentialsPath = "/Users/laszlonardai/Downloads/client_secret_1065020459899-stj6quehpc22rqf0i85qoqhuslnvseju.apps.googleusercontent.com.json";
-        PhotosLibraryClient client = PhotosLibraryClientFactory.createClient(credentialsPath, REQUIRED_SCOPES);
+        PhotosLibraryClient client = PhotosLibraryClientFactory.createClient(context.getCredentialFilePath(), REQUIRED_SCOPES);
 
         if (!isAlbumExists(client)) {
-            createAlbum(client, WEDDING_ALBUM_NAME);
+            createAlbum(client, context.getAlbumName());
         }
 
-        Album album = findAlbumByTitle(client, WEDDING_ALBUM_NAME);
+        Album album = findAlbumByTitle(client, context.getAlbumName());
 
-        String uploadToken = uploadBytes(client);
-        LOGGER.info("Recieved upload token: {}", uploadToken);
+        List<String> files = getFilesFromDirectory(context.getSyncDirectory());
 
-        NewMediaItem newMediaItem = NewMediaItemFactory
-                .createNewMediaItem(uploadToken, "Testing is my life");
-        List<NewMediaItem> newItems = Arrays.asList(newMediaItem);
+        LOGGER.info("List of files found in directory {}", files);
 
-        LOGGER.info("Created media Item list: {}", newItems);
+        files.stream()
+                .map(filePath -> uploadBytes(client, filePath))
+                .map(token -> createMediaItemFromUploadToken(token))
+                .forEach(newMediaItem -> positionMediaItemInAlbum(client, album, newMediaItem));
 
-        try {
-            // Create new media items in a specific album, positioned after a media item
-            AlbumPosition positionInAlbum = AlbumPositionFactory.createFirstInAlbum();
-            BatchCreateMediaItemsResponse response = client
-                    .batchCreateMediaItems(album.getId(), newItems, positionInAlbum);
-            // Check the response
-        } catch (ApiException e) {
-            LOGGER.error("ApiException happened when creating media", e);
-        }
     }
 
     public static Album findAlbumByTitle(PhotosLibraryClient client, String title) {
@@ -92,9 +87,41 @@ public class UploadDemo {
         ListAlbumsRequest request = ListAlbumsRequest.getDefaultInstance();
         final ListAlbumsSupplier listAlbumsSupplier = new ListAlbumsSupplier(client, request);
         List<Album> listOfAlbums = listAlbumsSupplier.get();
-        return listOfAlbums.stream().filter(album -> album.getTitle().equals(WEDDING_ALBUM_NAME)).findFirst().isPresent();
+        return listOfAlbums.stream().filter(album -> album.getTitle().equals(context.getAlbumName())).findFirst().isPresent();
     }
 
+    public static NewMediaItem createMediaItemFromUploadToken(String uploadToken) {
+        LOGGER.info("Recieved upload token: {}", uploadToken);
+        return NewMediaItemFactory.createNewMediaItem(uploadToken, "Testing is my life");
+    }
+
+    public static void positionMediaItemInAlbum(PhotosLibraryClient client, Album album, NewMediaItem newMediaItem) {
+        List<NewMediaItem> newItems = Arrays.asList(newMediaItem);
+        try {
+            // Create new media items in a specific album, positioned after a media item
+            AlbumPosition positionInAlbum = AlbumPositionFactory.createFirstInAlbum();
+            BatchCreateMediaItemsResponse response = client
+                    .batchCreateMediaItems(album.getId(), newItems, positionInAlbum);
+            // Check the response
+        } catch (ApiException e) {
+            LOGGER.error("ApiException happened when creating media", e);
+        }
+    }
+
+
+    public static List<String> getFilesFromDirectory(String directory) {
+        try (Stream<Path> walk = Files.walk(Paths.get(directory))) {
+
+            List<String> result = walk.filter(Files::isRegularFile)
+                    .map(x -> x.toString()).collect(Collectors.toList());
+
+            result.forEach(System.out::println);
+            return result;
+        } catch (IOException e) {
+            LOGGER.error("Can't read files from directory", e);
+        }
+        return new ArrayList<>();
+    }
 
     public static void createAlbum(PhotosLibraryClient client, String name) {
         try {
@@ -110,7 +137,16 @@ public class UploadDemo {
         }
     }
 
-    public static String uploadBytes(PhotosLibraryClient client) {
+    public static String readEnvironmentVariableWithDefault(String envVariableName, String defaultValue) {
+        String value = System.getenv(envVariableName);
+        if (value == null || "".equals(value)) {
+            return defaultValue;
+        }
+        return System.getenv(envVariableName);
+    }
+
+    public static String uploadBytes(PhotosLibraryClient client, String pathOfFile) {
+        LOGGER.info("Uploading file with path: {}", pathOfFile);
         try {
             // Create a new upload request
             // Specify the filename that will be shown to the user in Google Photos
@@ -119,7 +155,7 @@ public class UploadDemo {
                     UploadMediaItemRequest.newBuilder()
                             //filename of the media item along with the file extension
                             .setFileName("UploadedFile")
-                            .setDataFile(new RandomAccessFile("/Users/laszlonardai/Downloads/pic/IMG_8789.JPG", "r"))
+                            .setDataFile(new RandomAccessFile(pathOfFile, "r"))
                             .build();
             // Upload and capture the response
             UploadMediaItemResponse uploadResponse = client.uploadMediaItem(uploadRequest);
