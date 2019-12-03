@@ -1,0 +1,12 @@
+<configuration>
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%-5level] %logger{15} - %msg%n%rEx</pattern>
+            <immediateFlush>true</immediateFlush>
+        </encoder>
+    </appender>
+    <root level="DEBUG">
+        <appender-ref ref="CONSOLE" />
+    </root>
+    <logger name="io.grpc.netty.shaded.io" level="WARN"/>
+</configuration>

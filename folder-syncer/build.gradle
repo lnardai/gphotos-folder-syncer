@@ -53,20 +53,16 @@ sourceSets {
   }
 }
 
-// By default, run the album demo.
-mainClassName = "com.google.photos.library.sample.demo.AlbumDemo"
-
-task runAlbum(type: JavaExec) {
-  classpath sourceSets.main.runtimeClasspath
-  main = "com.google.photos.library.sample.demos.AlbumDemo"
+run {
+  environment "CREDENTIAL_FILE", System.getenv('CREDENTIAL_FILE')
+  environment "SYNC_DIRECTORY", System.getenv('SYNC_DIRECTORY')
+  environment "ALBUM_NAME", System.getenv('ALBUM_NAME')
 }
 
-task runFilter(type: JavaExec) {
-  classpath sourceSets.main.runtimeClasspath
-  main = "com.google.photos.library.sample.demos.FilterDemo"
-}
 
-task runShare(type: JavaExec) {
+mainClassName = "com.google.photos.library.sample.demos.UploadDirMain"
+
+task runUpload(type: JavaExec) {
   classpath sourceSets.main.runtimeClasspath
-  main = "com.google.photos.library.sample.demos.ShareDemo"
+  main = "com.google.photos.library.sample.demos.UploadDirMain"
 }

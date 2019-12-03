@@ -17,6 +17,7 @@ import org.slf4j.LoggerFactory;
 
 import com.google.api.gax.rpc.ApiException;
 import com.google.photos.library.v1.PhotosLibraryClient;
+import com.google.photos.library.v1.internal.InternalPhotosLibraryClient;
 import com.google.photos.library.v1.proto.AlbumPosition;
 import com.google.photos.library.v1.proto.BatchCreateMediaItemsResponse;
 import com.google.photos.library.v1.proto.ListAlbumsRequest;
@@ -26,6 +27,7 @@ import com.google.photos.library.v1.upload.UploadMediaItemResponse;
 import com.google.photos.library.v1.util.AlbumPositionFactory;
 import com.google.photos.library.v1.util.NewMediaItemFactory;
 import com.google.photos.types.proto.Album;
+import com.google.photos.types.proto.MediaItem;
 
 public class UploadApp {
 
@@ -46,18 +48,48 @@ public class UploadApp {
         }
 
         Album album = findAlbumByTitle(client, context.getAlbumName());
+        LOGGER.info("File Count in Album  {}", album.getMediaItemsCount());
 
-        List<String> files = getFilesFromDirectory(context.getSyncDirectory());
-
+        List<Path> files = getFilesFromDirectory(context.getSyncDirectory());
         LOGGER.info("List of files found in directory {}", files);
+        List<String> albumFiles = getFileNamesFromAlbum(album);
+        LOGGER.info("List of files found in Album {}", albumFiles);
 
-        files.stream()
+        List<Path> filesNeedToBeUploaded = collectFilesThatAreNotInAlbum(files, albumFiles);
+        if (filesNeedToBeUploaded.isEmpty()) {
+            LOGGER.info("No files will be Uploaded as Album already contains every file with these names");
+        }
+
+        LOGGER.info("List of files that should be uplaoded {}", filesNeedToBeUploaded);
+
+        filesNeedToBeUploaded.stream()
                 .map(filePath -> uploadBytes(client, filePath))
                 .map(token -> createMediaItemFromUploadToken(token))
                 .forEach(newMediaItem -> positionMediaItemInAlbum(client, album, newMediaItem));
     }
 
-    public String uploadBytes(PhotosLibraryClient client, String pathOfFile) {
+    private List<Path> collectFilesThatAreNotInAlbum(List<Path> files, List<String> albumFiles) {
+        return files.stream()
+                .filter(file -> !albumFiles.contains(file.getFileName().toString())).collect(Collectors.toList());
+    }
+
+    private List<String> getFileNamesFromAlbum(Album album) {
+        try {
+            // Make a request to list all media items in an album
+            // Provide the ID of the album as a parameter in the searchMediaItems call
+            // Iterate over all the retrieved media items
+            InternalPhotosLibraryClient.SearchMediaItemsPagedResponse response = client.searchMediaItems(album.getId());
+            List<String> itemNames = new ArrayList<>();
+            for (MediaItem item : response.iterateAll()) {
+                itemNames.add(item.getFilename());
+            }
+            return itemNames;
+        } catch (ApiException e) {
+            throw new RuntimeException("Can't get already present files", e);
+        }
+    }
+
+    public String uploadBytes(PhotosLibraryClient client, Path pathOfFile) {
         LOGGER.info("Uploading file with path: {}", pathOfFile);
         try {
             // Create a new upload request
@@ -66,8 +98,8 @@ public class UploadApp {
             UploadMediaItemRequest uploadRequest =
                     UploadMediaItemRequest.newBuilder()
                             //filename of the media item along with the file extension
-                            .setFileName("UploadedFile")
-                            .setDataFile(new RandomAccessFile(pathOfFile, "r"))
+                            .setFileName(pathOfFile.getFileName().toString())
+                            .setDataFile(new RandomAccessFile(pathOfFile.toAbsolutePath().toString(), "r"))
                             .build();
             // Upload and capture the response
             UploadMediaItemResponse uploadResponse = client.uploadMediaItem(uploadRequest);
@@ -105,6 +137,7 @@ public class UploadApp {
     }
 
     public void positionMediaItemInAlbum(PhotosLibraryClient client, Album album, NewMediaItem newMediaItem) {
+        LOGGER.info("Adding media item to album: {}", newMediaItem);
         List<NewMediaItem> newItems = Arrays.asList(newMediaItem);
         try {
             // Create new media items in a specific album, positioned after a media item
@@ -118,11 +151,11 @@ public class UploadApp {
     }
 
 
-    public List<String> getFilesFromDirectory(String directory) {
+    public List<Path> getFilesFromDirectory(String directory) {
         try (Stream<Path> walk = Files.walk(Paths.get(directory))) {
 
-            List<String> result = walk.filter(Files::isRegularFile)
-                    .map(x -> x.toString()).collect(Collectors.toList());
+            List<Path> result = walk.filter(Files::isRegularFile)
+                    .collect(Collectors.toList());
 
             result.forEach(System.out::println);
             return result;

@@ -1,0 +1,4 @@
+# make sure to set the correct properties
+export CREDENTIAL_FILE="../credentials.json"
+export SYNC_DIRECTORY="./pictures"
+export ALBUM_NAME="Wedding"
